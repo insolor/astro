@@ -1,0 +1,218 @@
+
+include dos_rescue.ew as dos_rescue
+set_title("Astro")
+set_delay(0)
+-- include graphics.e
+-- include machine.e
+-- include misc.e
+include std/error.e
+
+include vector.e
+include routines.e
+
+global constant
+    ZOOM_FACTOR = 1.1,
+    INIT_ZOOM = 290/AU
+
+global atom zoom -- zoom ratio
+
+global
+procedure zoom_restore()
+    zoom = INIT_ZOOM
+end procedure
+
+zoom_restore()
+
+global
+procedure zoom_in()
+    zoom *= ZOOM_FACTOR
+end procedure
+
+global
+procedure zoom_out()
+    zoom /= ZOOM_FACTOR
+end procedure
+
+constant FILL = 1
+
+procedure draw_color(sequence coord, integer color)
+    if coord[2][Y]-coord[1][Y] <= 2 then
+        dos_rescue:pixel(color,coord[1])
+    else
+        dos_rescue:ellipse(color,FILL,coord[1],coord[2]-1)
+    end if
+end procedure
+
+global
+procedure erase(sequence coord)
+    draw_color(coord,BLACK)
+end procedure
+
+function parallel_projection(sequence pos)
+    return {pos[X],pos[Y]}
+end function
+
+constant ERR = {1e6,1e6} -- position far behind the screen bounds
+
+function central_projection(sequence pos) -- aka. perspective projection
+    if pos[Z]<=-100 then
+        return ERR
+    else
+        return {pos[X],pos[Y]}/(pos[Z]+100)
+    end if
+end function
+
+function projection(sequence pos)
+    return parallel_projection(pos)
+end function
+
+global integer COO -- * 13.08.10
+COO = 0
+
+global sequence screen_center -- center of the screen
+global sequence center
+global object follow_coord
+center = {0,0}
+follow_coord = 0
+
+constant poly = {{-1,-1},{1,1}}
+constant polylen = length(poly)
+
+global
+function redraw(sequence body) --> body
+    sequence coord
+    coord = floor((projection(body[POS]-follow_coord)+center)*zoom) + screen_center
+    coord = repeat(coord, polylen) + poly*body[RAD]*zoom
+    
+    if COO = 0 then -- * 13.08.10
+        COO = length(body) + 1
+    end if
+    
+    if length(body) < COO then -- draw first time
+        draw_color(coord,body[COLOR])
+        body = append(body,coord)
+    elsif atom(body[COO]) then -- forced redraw
+        draw_color(coord,body[COLOR])
+        body[COO] = coord
+    elsif not equal(body[COO],coord) then -- draw only when position changes
+        erase(body[COO])
+        draw_color(coord,body[COLOR])
+        body[COO] = coord
+    end if
+    return body
+end function
+
+global
+function refresh(sequence body) --> body
+    dos_rescue:clear_screen()
+    for n = 1 to length(body) do
+        if sequence(body[n]) then
+            body[n][COO] = 0
+        end if
+    end for
+    return body
+end function
+
+global
+procedure init_graph()
+    sequence vc
+    dos_rescue:use_vesa(1)
+    if dos_rescue:graphics_mode(259) then
+        crash_message("Unable to set graphics mode\n")
+        ? 1/0
+    end if
+    vc = dos_rescue:video_config()
+    screen_center = vc[VC_XPIXELS..VC_YPIXELS]/2
+end procedure
+
+global
+procedure restore_graph()
+    if dos_rescue:graphics_mode(-1) then
+    end if
+end procedure
+
+integer selection
+selection = 0
+
+object select_coo
+select_coo = 0
+procedure draw_selection_box(integer color)
+    if sequence(select_coo) then
+        draw_line(color,{select_coo[1]+{0,3},select_coo[1],select_coo[1]+{3,0}})
+        draw_line(color,{select_coo[2]-{0,3},select_coo[2],select_coo[2]-{3,0}})
+        if length(select_coo)=2 then
+            select_coo &= {{select_coo[2][X],select_coo[1][Y]},{select_coo[1][X],select_coo[2][Y]}}
+        end if
+        draw_line(color,{select_coo[3]-{3,0},select_coo[3],select_coo[3]+{0,3}})
+        draw_line(color,{select_coo[4]+{3,0},select_coo[4],select_coo[4]-{0,3}})
+    end if
+end procedure
+
+global procedure draw_selection(sequence body, integer range)
+    if selection then
+        if atom(select_coo) or not equal(body[selection][COO]+{{-range,-range},{range,range}},select_coo[1..2]) then
+            draw_selection_box(BLACK)
+        end if
+        select_coo = body[selection][COO]+{{-range,-range},{range,range}}
+        draw_selection_box(BRIGHT_WHITE)
+    end if
+end procedure
+
+global procedure deselect()
+    if sequence(select_coo) then
+        draw_selection_box(BLACK)
+        select_coo = 0
+    end if
+    selection = 0
+end procedure
+
+global procedure select(integer x, integer y, integer range, sequence body, integer count)
+    if COO then
+        if selection then
+            for i = selection+1 to count do
+                if body[i][COO][1][X]-range <= x and body[i][COO][2][X]+range >= x and
+                        body[i][COO][1][Y]-range <= y and body[i][COO][2][Y]+range >= y then
+                    selection = i
+                    return
+                end if
+            end for
+            for i = 1 to selection do
+                if body[i][COO][1][X]-range <= x and body[i][COO][2][X]+range >= x and
+                        body[i][COO][1][Y]-range <= y and body[i][COO][2][Y]+range >= y then
+                    selection = i
+                    return
+                end if
+            end for
+            deselect()
+        else
+            for i = 1 to count do
+                if body[i][COO][1][X]-range <= x and body[i][COO][2][X]+range >= x and
+                        body[i][COO][1][Y]-range <= y and body[i][COO][2][Y]+range >= y then
+                    selection = i
+                    return
+                end if
+            end for
+            deselect()
+        end if
+    end if
+end procedure
+
+global function get_selection()
+    return selection
+end function
+
+global procedure select_next(integer count)
+    if selection<count then
+        selection += 1
+    else
+        selection = 1
+    end if
+end procedure
+
+global procedure select_previous(integer count)
+    if selection>1 then
+        selection -= 1
+    else
+        selection = count
+    end if
+end procedure
