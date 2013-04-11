@@ -1,0 +1,444 @@
+-- Mike Manturov (insolor@gmail.com), 2010
+-- Based on and inspired with Marco Achury's estrella.ex program
+
+-- Keyboard commands (z/x,c,f,-/+,p,0)
+-- Inelastic/Elastic/Mixed collision
+-- Some demos
+-- Print screen function (key 'p')
+
+include output.ew
+include dos_rescue.ew as dos_rescue
+include mouse_rescue.ew
+include routines.e
+include printscr.e
+include std/error.e
+
+constant NONE = -1
+
+-- Various collision types
+
+function Inelastic(sequence bibj, sequence delta_r, atom r)
+    sequence p,cm
+    sequence bi,bj
+    bi = bibj[1]
+    bj = bibj[2]
+    
+    p = bi[VEL]*bi[MAS] + bj[VEL]*bj[MAS]
+    cm = bi[POS]*bi[MAS] + bj[POS]*bj[MAS]
+    
+    -- Confluence
+    bi[MAS] += bj[MAS]
+    bi[POS] = cm/bi[MAS]
+    bi[VEL] = p/bi[MAS]
+    bi[RAD] = power(bi[RAD]*bi[RAD]*bi[RAD] + bj[RAD]*bj[RAD]*bj[RAD], 1/3)
+    
+    if length(bj) >= COO and sequence(bj[COO]) then
+        erase(bj[COO])
+    end if
+
+    return {bi}
+end function
+
+global atom elasticity
+elasticity = 20
+function Elastic(sequence bibj, sequence delta_r, atom distance)
+    sequence F
+    atom d
+    sequence bi,bj
+    bi = bibj[1]
+    bj = bibj[2]
+    d = bi[RAD]+bj[RAD]-distance
+    F = - elasticity * delta_r/distance * d -- the Hook law
+    bi[VEL] += F/bi[MAS]*dt
+    bj[VEL] -= F/bj[MAS]*dt
+    return {bi,bj}
+end function
+
+global atom mu
+mu = 0.5
+function Stokes(sequence bibj, sequence delta_r, atom distance)
+    sequence F, vel
+    atom r
+    sequence bi,bj
+    bi = bibj[1]
+    bj = bibj[2]
+    
+    r = min(bi[RAD],bj[RAD])
+    vel = bj[VEL]-bi[VEL]
+    F = -mu*r*vel -- the Stokes force
+    bi[VEL] -= F/bi[MAS]*dt
+    bj[VEL] -= (-F)/bj[MAS]*dt
+    
+    return {bi,bj}
+end function
+
+function Slide(sequence bibj, sequence delta_r, atom distance)
+    sequence F, vel
+    atom r
+    sequence bi,bj
+    bi = bibj[1]
+    bj = bibj[2]
+    
+    r = min(bi[RAD],bj[RAD])
+    vel = scalar_mul_3d(bj[VEL]-bi[VEL], delta_r)/distance * delta_r/distance
+    F = -mu*r*vel -- the Stokes force
+    -- if bi[MAS] = 0 then
+        -- bi[VEL] = bj[VEL]
+    -- elsif bj[MAS] = 0 then
+        -- bj[VEL] = bi[VEL]
+    -- else
+        bi[VEL] -=  F/bi[MAS]*dt
+        bj[VEL] -= -F/bj[MAS]*dt
+    -- end if
+    
+    return {bi,bj}
+end function
+
+global object Collisions
+-- Collisions = { routine_id("Stokes"), routine_id("Elastic") }
+Collisions = { routine_id("Slide"), routine_id("Elastic") }
+
+function Collide(sequence bibj, sequence delta_r, atom distance)
+    if atom(Collisions) then
+        if Collisions != NONE then
+            bibj = call_func(Collisions,{bibj,delta_r,distance})
+        end if
+    else
+        for n = 1 to length(Collisions) do
+            if Collisions[n] != NONE then
+                bibj = call_func(Collisions[n],{bibj,delta_r,distance})
+            end if
+        end for
+    end if
+    return bibj
+end function
+
+-- Various far interaction types (without collision)
+
+function MutualGravity(sequence bibj, sequence delta_r, atom distance)
+    atom gravity
+    sequence vgravity
+    sequence bi,bj
+    bi = bibj[1]
+    bj = bibj[2]
+    if distance > 0 then
+        gravity = G / power(distance,2) -- F = G * Mi * Mj / r^2 -- F0 = G / r^2
+        vgravity = (delta_r / distance) * gravity
+        -- by The Third Newton's law, Fi = -Fj
+        bi[VEL] += vgravity * bj[MAS]*dt -- accel  =  F / Mi * dt  =  F0 * Mj * dt
+        bj[VEL] -= vgravity * bi[MAS]*dt -- accel  =  - F / Mj * dt  =  - F0 * Mi * dt
+    end if
+    return {bi,bj}
+end function
+
+function Gravity(sequence p, atom M, sequence delta_r, atom distance)
+    atom a
+    if distance > 0 then
+        a = G*M/power(distance,2)
+        p[VEL] += a*dt
+    end if
+    return p
+end function
+
+global
+object Interactions
+Interactions = routine_id("MutualGravity")
+
+function Interact(sequence bibj, sequence delta_r, atom distance)
+    if atom(Interactions) then
+        if Interactions != NONE then
+            bibj = call_func(Interactions,{bibj,delta_r,distance})
+        end if
+    else
+        for n = 1 to length(Interactions) do
+            if Interactions[n] != NONE then
+                bibj = call_func(Interactions[n],{bibj,delta_r,distance})
+            end if
+        end for
+    end if
+    return bibj
+end function
+
+-- Action of external or inner forces
+
+-- for example:
+function Atmosphere(sequence b)
+    b[VEL] -= 0.01*b[RAD]*b[VEL]/b[MAS]*dt
+    return {b}
+end function
+
+global
+object External
+External = NONE
+-- External = routine_id("Atmosphere")
+
+function ForceExternal(sequence b)
+    sequence bb
+    if atom(External) then
+        if External != NONE then
+            bb = call_func(External, {b})
+        else
+            bb = {b}
+        end if
+    else
+        for n = 1 to length(External) do
+            if External[n] != NONE then
+                bb = call_func(External[n],{b})
+            end if
+        end for
+    end if
+    return bb
+end function
+
+constant DYN_DT = 1
+integer pause
+pause = 0
+
+global
+procedure motion(sequence body, atom dt0)
+    atom t
+    atom distance, sqdist
+    sequence b
+    sequence delta_r
+    atom key
+    object mouse_event
+    integer count,old_count
+    integer i,j
+    atom time1, time2, cycles
+    integer drag,dragged
+    sequence last_mouse_pos
+    integer follow,sel
+    dt = dt0
+    deselect()
+    drag = 0
+    follow = 0
+    t = 0
+    dos_rescue:clear_screen()
+    body = center_mass(body)
+    body = zero_momentum(body)
+    center = {0,0}
+    zoom_restore()
+    count = length(body)
+    old_count = 0
+    for n = 1 to count do
+        body[n] = redraw(body[n])
+    end for
+    cycles = 0
+    time1 = time()
+    time2 = time1
+    while 1 do
+        if not(pause or drag) then
+            i = 1
+            if DYN_DT and old_count = 0 then
+                old_count = count
+            end if
+            while i <= count do
+                j = i + 1
+                
+                if i = 1 and External != NONE then
+                    b = ForceExternal(body[i])
+                    body[i] = b[1]
+                    if length(b) > 1 then
+                        body = body[1..count]
+                        for n = 2 to length(b) do
+                            body = append(body,b[n])
+                            body[n] = redraw(body[n])
+                        end for
+                        count = length(body)
+                    end if
+                end if
+                
+                while j <= count do
+                    delta_r = body[j][POS] - body[i][POS]
+                    sqdist = scalar1(delta_r)
+                    distance = modulus3d(delta_r)
+                    
+                    -- Collision detection
+                    if sqdist < power(body[i][RAD]+body[j][RAD],2) then -- collision occured
+                        b = Collide({body[i],body[j]},delta_r,distance)
+                        if length(b) < 2 then
+                            body[j] = body[count]
+                            body[count] = 0
+                            count -= 1
+                            if length(b) = 0 then
+                                body[i] = body[count]
+                                body[count] = 0
+                                count -= 1
+                                -- body = body[1..count]
+                            else
+                                body[i] = b[1]
+                            end if
+                        else
+                            body[i] = b[1]
+                            body[j] = b[2]
+                            if length(b) > 2 then
+                                body = body[1..count]
+                                -- for n = 3 to length(b) do
+                                    -- body &= b[n]
+                                -- end for
+                                body &= b[3..$]
+                                -- count = length(body)
+                            end if
+                            count += length(b)-2
+                        end if
+                        
+                    else
+                        b = Interact({body[i],body[j]},delta_r,distance)
+                        body[i] = b[1]
+                        body[j] = b[2]
+                    end if
+                j += 1
+                end while -- j <= count
+            i += 1
+            end while -- i <= count
+            
+            if DYN_DT then
+                if count = old_count then
+                    old_count = 0
+                else
+                    dt *= count*count/old_count/old_count
+                    old_count = 0
+                end if
+            end if
+            
+            t += dt
+            
+            cycles += 1
+            time2 = time()
+            if time2-time1 >= 0.5 then
+                cycles *= 2
+                dos_rescue:position(4,1)
+                -- dos_rescue:printf(1,"%-4d cycles per second\n",cycles)
+                if dt*cycles >= year then
+                    dos_rescue:printf(1,"%6.2f years per second  \n",dt*cycles/year)
+                elsif dt*cycles >= day then
+                    dos_rescue:printf(1,"%6.2f days per second   \n",dt*cycles/day)
+                elsif dt*cycles >= hour then
+                    dos_rescue:printf(1,"%6.2f hours per second  \n",dt*cycles/hour)
+                elsif dt*cycles >= minute then
+                    dos_rescue:printf(1,"%6.2f minutes per second\n",dt*cycles/minute)
+                else
+                    dos_rescue:printf(1,"%6.2f seconds per second\n",dt*cycles)
+                end if
+                cycles = 0
+                time1 = time()
+            end if
+        end if
+        
+        if follow then
+            if not(pause or drag) then
+                follow_coord = body[follow][POS]+body[follow][VEL]*dt
+            end if
+        else
+            follow_coord = 0
+        end if
+        
+        for n = 1 to count do
+            if not(pause or drag) then
+                body[n][POS] += body[n][VEL]*dt
+            end if
+            body[n] = redraw(body[n])
+        end for
+        draw_selection(body,10)
+        
+        dos_rescue:position(1,1)
+        dos_rescue:printf(1,"%d days %02d:%02d:%04.1f        \n",format_time(t))
+        dos_rescue:printf(1,"%d bodies       \n",length(body))
+        dos_rescue:printf(1,"dt = %g sec       \n",dt)
+        
+        sel = get_selection()
+        if get_selection() then
+            dos_rescue:position(6,1)
+            if atom(body[sel][LABEL]) then
+                dos_rescue:printf(1,"Selected body: #%-10d\n",{body[sel][LABEL]})
+            else
+                dos_rescue:printf(1,"Selected body: %-10s\n",{body[sel][LABEL]})
+            end if
+            dos_rescue:printf(1,"Mass: %-16g\n",{body[sel][MAS]})
+            dos_rescue:printf(1,"Radius: %-16g\n",{body[sel][RAD]})
+        end if
+        
+        key = dos_rescue:get_key()
+        
+        if key = 'z' then
+            zoom_in()
+        elsif key = 'x' then
+            zoom_out()
+        elsif key = '1' then
+            zoom_restore() -- zoom 1:1
+            body = refresh(body)
+        elsif key = 'f' then -- follow selected body
+            follow = get_selection()
+            center = {0,0}
+            body = refresh(body)
+            draw_selection(body,10)
+        elsif key = 'P' then -- print screen
+            print_screen("astro")
+        elsif key = 'p' then -- pause
+            pause = not pause
+        elsif key = '-' then -- slower
+            dt /= 2
+        elsif key = '=' or key = '+' then -- faster, but less precious
+            dt *= 2
+        elsif key = 331 then -- Left
+            center[1] += 50/zoom
+        elsif key = 333 then -- Right
+            center[1] -= 50/zoom
+        elsif key = 328 then -- Up
+            center[2] += 50/zoom
+        elsif key = 336 then -- Down
+            center[2] -= 50/zoom
+        elsif key = 327 then -- Home
+            center = {0,0}
+        elsif key = 9 then -- select next body
+            select_next(count)
+        elsif key = 8 then -- select previous body
+            select_previous(count)
+        elsif key = 27 then -- deselect
+            deselect()
+        elsif key = ')' then -- Shift+'0' -- divide by zero:)
+            crash_message("Program was crashed successfully!\nSee ex.err for debug information.")
+            ? 1/0
+        elsif key = 13 then -- next demo
+            exit
+        end if
+        
+        mouse_event = get_mouse()
+        if sequence(mouse_event) then
+            if mouse_event[1] = LEFT_DOWN then
+                drag = 1
+                dragged = 0
+                last_mouse_pos = mouse_event[2..3]
+            elsif mouse_event[1] = MOVE then
+                if drag then
+                    center += (mouse_event[2..3]-last_mouse_pos)/zoom
+                    last_mouse_pos = mouse_event[2..3]
+                    dragged = 1
+                end if
+            elsif mouse_event[1] = LEFT_UP then
+                if not dragged then
+                    select(mouse_event[2],mouse_event[3],10,body,count)
+                end if
+                drag = 0
+            elsif mouse_event[1] = WHEEL_DOWN then
+                center += (mouse_event[2..3]-screen_center)/zoom*(ZOOM_FACTOR-1)
+                zoom_out()
+            elsif mouse_event[1] = WHEEL_UP then
+                center -= (mouse_event[2..3]-screen_center)/zoom*(ZOOM_FACTOR-1)
+                zoom_in()
+            end if
+        end if
+    end while
+end procedure
+
+include demos/basdemos.e as bas
+
+procedure main()
+    bas:All()
+end procedure
+
+init_graph()
+
+main()
+
+restore_graph()
