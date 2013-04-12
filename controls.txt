@@ -9,7 +9,7 @@ p - pause
 P (shift+p) - make screenshot
 Shift+0 - divide by zero (crash and emit ex.err)
 Arrow keys - pan view
-Home - return view to the origin or to the followed body
+Home - return view to the followed body
 8 - select previous body
 9 - select next body
 Esc - deselect
