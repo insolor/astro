@@ -1,0 +1,21 @@
+include dos_rescue.ew
+include aconsts.e
+
+procedure motion(sequence bodies, sequence particles, atom dt)
+    atom t
+    for i = 1 to length(bodies) do
+        for j = i+1 to length(bodies) do
+            
+        end for
+    end for
+end procedure
+
+graphics_mode(259)
+
+sequence bodies = {}
+
+bodies = append(bodies,
+    {M_Sun,R_Sun,{0,0},{0,0}}
+)
+
+graphics_mode(-1)
