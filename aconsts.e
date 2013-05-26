@@ -1,7 +1,4 @@
 
-include routines.e
-include vector.e
-
 global constant G = 6.672E-11
 
 global constant day = 60*60*24, hour = 60*60, minute = 60, year = 365.242199*day
